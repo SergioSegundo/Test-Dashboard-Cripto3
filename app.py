@@ -2,21 +2,17 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
-from datetime import datetime, timezone
-from ta.momentum import RSIIndicator
-from ta.trend import SMAIndicator, EMAIndicator, MACD
-from ta.volatility import BollingerBands, AverageTrueRange
-from ta.volume import OnBalanceVolumeIndicator
+from datetime import datetime
+import pandas_ta as ta
 import plotly.graph_objects as go
 
-# Opcional autorefresh
 try:
     from streamlit_autorefresh import st_autorefresh
     AUTORELOAD_AVAILABLE = True
 except Exception:
     AUTORELOAD_AVAILABLE = False
 
-# Configuración
+# Configuración de símbolos para CoinGecko
 SYMBOLS = {
     'Bitcoin': 'bitcoin',
     'Ethereum': 'ethereum',
@@ -24,7 +20,6 @@ SYMBOLS = {
     'Tron': 'tron'
 }
 
-# --- Función para obtener OHLCV desde CoinGecko
 @st.cache_data(ttl=600)
 def fetch_ohlcv_coingecko(coin_name: str, vs_currency='usd', days=30, interval='daily'):
     coin_id = SYMBOLS.get(coin_name)
@@ -60,44 +55,45 @@ def fetch_ohlcv_coingecko(coin_name: str, vs_currency='usd', days=30, interval='
         st.error(f"Error obteniendo datos de CoinGecko: {e}")
         return None
 
-# Indicadores técnicos
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
-    close = out['close']
-    high = out['high']
-    low = out['low']
-    vol = out['volume']
 
-    out['sma20'] = SMAIndicator(close, window=20, fillna=True).sma_indicator()
-    out['sma50'] = SMAIndicator(close, window=50, fillna=True).sma_indicator()
-    out['sma200'] = SMAIndicator(close, window=200, fillna=True).sma_indicator()
+    # RSI 14
+    out['rsi14'] = ta.rsi(out['close'], length=14)
 
-    out['ema9'] = EMAIndicator(close, window=9, fillna=True).ema_indicator()
-    out['ema21'] = EMAIndicator(close, window=21, fillna=True).ema_indicator()
-    out['ema50'] = EMAIndicator(close, window=50, fillna=True).ema_indicator()
+    # SMA 20, 50, 200
+    out['sma20'] = ta.sma(out['close'], length=20)
+    out['sma50'] = ta.sma(out['close'], length=50)
+    out['sma200'] = ta.sma(out['close'], length=200)
 
-    macd = MACD(close, window_slow=26, window_fast=12, window_sign=9)
-    out['macd'] = macd.macd()
-    out['macd_signal'] = macd.macd_signal()
-    out['macd_hist'] = macd.macd_diff()
+    # EMA 9, 21, 50
+    out['ema9'] = ta.ema(out['close'], length=9)
+    out['ema21'] = ta.ema(out['close'], length=21)
+    out['ema50'] = ta.ema(out['close'], length=50)
 
-    out['rsi14'] = RSIIndicator(close, window=14, fillna=True).rsi()
+    # MACD
+    macd = ta.macd(out['close'])
+    out['macd'] = macd['MACD_12_26_9']
+    out['macd_signal'] = macd['MACDs_12_26_9']
+    out['macd_hist'] = macd['MACDh_12_26_9']
 
-    bb = BollingerBands(close, window=20, window_dev=2, fillna=True)
-    out['bb_h'] = bb.bollinger_hband()
-    out['bb_l'] = bb.bollinger_lband()
+    # Bollinger Bands
+    bbands = ta.bbands(out['close'], length=20, std=2)
+    out['bb_h'] = bbands['BBU_20_2.0']
+    out['bb_l'] = bbands['BBL_20_2.0']
 
-    out['atr14'] = AverageTrueRange(high=high, low=low, close=close, window=14, fillna=True).average_true_range()
+    # ATR 14
+    out['atr14'] = ta.atr(out['high'], out['low'], out['close'], length=14)
 
-    obv = OnBalanceVolumeIndicator(close=close, volume=vol, fillna=True)
-    out['obv'] = obv.on_balance_volume()
+    # OBV
+    out['obv'] = ta.obv(out['close'], out['volume'])
 
+    # VWAP aproximado
     tp = (out['high'] + out['low'] + out['close']) / 3
     out['vwap'] = (tp * out['volume']).cumsum() / out['volume'].cumsum()
 
     return out
 
-# Señal compuesta simple
 def generate_signal(latest: pd.Series) -> str:
     close = latest['close']
     ema21 = latest['ema21']
@@ -117,7 +113,6 @@ def generate_signal(latest: pd.Series) -> str:
         return 'SELL — tendencia bajista. Evitar entradas largas o preparar stop.'
     return 'HOLD — sin señal clara. Esperar confirmación (price/volume).'
 
-# Highlights diarios simples
 def daily_highlights(df: pd.DataFrame) -> dict:
     latest = df.iloc[-1]
     last_24h = df.last('1D')
@@ -132,7 +127,6 @@ def daily_highlights(df: pd.DataFrame) -> dict:
     }
     return highlight
 
-# Streamlit UI
 st.set_page_config(layout='wide', page_title='Crypto Dashboard (CoinGecko)')
 st.title('Crypto Dashboard — usando CoinGecko (BTC, ETH, XRP, TRX)')
 
@@ -211,4 +205,3 @@ st.markdown('''
 - Alertas automáticas (Telegram, email) basadas en señales.
 - Backtesting de reglas.
 ''')
-
