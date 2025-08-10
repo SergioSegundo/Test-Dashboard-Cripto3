@@ -2,9 +2,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
-from datetime import datetime
-import pandas_ta as ta
 import plotly.graph_objects as go
+from datetime import datetime
 
 try:
     from streamlit_autorefresh import st_autorefresh
@@ -12,7 +11,6 @@ try:
 except Exception:
     AUTORELOAD_AVAILABLE = False
 
-# Configuración de símbolos para CoinGecko
 SYMBOLS = {
     'Bitcoin': 'bitcoin',
     'Ethereum': 'ethereum',
@@ -44,7 +42,6 @@ def fetch_ohlcv_coingecko(coin_name: str, vs_currency='usd', days=30, interval='
         df_prices['timestamp'] = pd.to_datetime(df_prices['timestamp'], unit='ms')
         df_volumes['timestamp'] = pd.to_datetime(df_volumes['timestamp'], unit='ms')
         df = pd.merge(df_prices, df_volumes, on='timestamp')
-        # CoinGecko no da OHLC, solo precio puntual. Repetimos precio en open, high, low, close
         df['open'] = df['price']
         df['high'] = df['price']
         df['low'] = df['price']
@@ -55,38 +52,57 @@ def fetch_ohlcv_coingecko(coin_name: str, vs_currency='usd', days=30, interval='
         st.error(f"Error obteniendo datos de CoinGecko: {e}")
         return None
 
-def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
+# Indicadores propios
+def SMA(series, window):
+    return series.rolling(window=window).mean()
+
+def EMA(series, window):
+    return series.ewm(span=window, adjust=False).mean()
+
+def RSI(series, window=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def MACD(series, fast=12, slow=26, signal=9):
+    ema_fast = EMA(series, fast)
+    ema_slow = EMA(series, slow)
+    macd_line = ema_fast - ema_slow
+    signal_line = EMA(macd_line, signal)
+    macd_hist = macd_line - signal_line
+    return macd_line, signal_line, macd_hist
+
+def compute_indicators(df):
     out = df.copy()
+    close = out['close']
 
-    # RSI 14
-    out['rsi14'] = ta.rsi(out['close'], length=14)
+    out['rsi14'] = RSI(close, 14)
+    out['sma20'] = SMA(close, 20)
+    out['sma50'] = SMA(close, 50)
+    out['sma200'] = SMA(close, 200)
 
-    # SMA 20, 50, 200
-    out['sma20'] = ta.sma(out['close'], length=20)
-    out['sma50'] = ta.sma(out['close'], length=50)
-    out['sma200'] = ta.sma(out['close'], length=200)
+    out['ema9'] = EMA(close, 9)
+    out['ema21'] = EMA(close, 21)
+    out['ema50'] = EMA(close, 50)
 
-    # EMA 9, 21, 50
-    out['ema9'] = ta.ema(out['close'], length=9)
-    out['ema21'] = ta.ema(out['close'], length=21)
-    out['ema50'] = ta.ema(out['close'], length=50)
+    macd_line, signal_line, macd_hist = MACD(close)
+    out['macd'] = macd_line
+    out['macd_signal'] = signal_line
+    out['macd_hist'] = macd_hist
 
-    # MACD
-    macd = ta.macd(out['close'])
-    out['macd'] = macd['MACD_12_26_9']
-    out['macd_signal'] = macd['MACDs_12_26_9']
-    out['macd_hist'] = macd['MACDh_12_26_9']
-
-    # Bollinger Bands
-    bbands = ta.bbands(out['close'], length=20, std=2)
-    out['bb_h'] = bbands['BBU_20_2.0']
-    out['bb_l'] = bbands['BBL_20_2.0']
-
-    # ATR 14
-    out['atr14'] = ta.atr(out['high'], out['low'], out['close'], length=14)
-
-    # OBV
-    out['obv'] = ta.obv(out['close'], out['volume'])
+    # Volumen On Balance Volume (OBV) simple
+    obv = [0]
+    for i in range(1, len(out)):
+        if out['close'].iloc[i] > out['close'].iloc[i-1]:
+            obv.append(obv[-1] + out['volume'].iloc[i])
+        elif out['close'].iloc[i] < out['close'].iloc[i-1]:
+            obv.append(obv[-1] - out['volume'].iloc[i])
+        else:
+            obv.append(obv[-1])
+    out['obv'] = obv
 
     # VWAP aproximado
     tp = (out['high'] + out['low'] + out['close']) / 3
@@ -94,7 +110,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
     return out
 
-def generate_signal(latest: pd.Series) -> str:
+def generate_signal(latest):
     close = latest['close']
     ema21 = latest['ema21']
     ema50 = latest['ema50']
@@ -113,7 +129,7 @@ def generate_signal(latest: pd.Series) -> str:
         return 'SELL — tendencia bajista. Evitar entradas largas o preparar stop.'
     return 'HOLD — sin señal clara. Esperar confirmación (price/volume).'
 
-def daily_highlights(df: pd.DataFrame) -> dict:
+def daily_highlights(df):
     latest = df.iloc[-1]
     last_24h = df.last('1D')
     change_24h = (latest['close'] / last_24h['close'].iloc[0] - 1) * 100 if len(last_24h) > 1 else np.nan
