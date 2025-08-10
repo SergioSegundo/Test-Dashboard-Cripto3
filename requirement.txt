@@ -3,6 +3,6 @@ ccxt
 pandas
 numpy
 requests
-ta==0.10.1
+pandas-ta==0.3.14b0
 plotly
 streamlit-autorefresh
