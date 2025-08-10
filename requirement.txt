@@ -6,4 +6,3 @@ requests
 ta
 plotly
 streamlit-autorefresh
-
