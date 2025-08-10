@@ -1,9 +1,6 @@
 streamlit
-ccxt
 pandas
 numpy
 requests
-pandas-ta==0.3.14b0
 plotly
 streamlit-autorefresh
-scipy
